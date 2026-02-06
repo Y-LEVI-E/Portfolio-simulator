@@ -354,9 +354,53 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+
+# --- ניהול הגדרות משתמש ---
+SETTINGS_FILE = "user_settings.json"
+
+def load_settings():
+    """טוען את הגדרות המשתמש מהקובץ"""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return None
+    return None
+
+def save_settings(residency_idx, include_withdrawal, auto_refresh):
+    """שומר את הגדרות המשתמש לקובץ"""
+    data = {
+        "residency_idx": residency_idx,
+        "include_withdrawal": include_withdrawal,
+        "auto_refresh": auto_refresh,
+        "last_updated": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    }
+    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    return data
+
 # --- אתחול session state ---
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = datetime.now()
+
+# טעינת הגדרות משתמש מקובץ JSON
+saved_settings = load_settings()
+if saved_settings:
+    if 'residency_idx' not in st.session_state:
+        st.session_state.residency_idx = saved_settings.get("residency_idx", 1)
+    if 'include_withdrawal' not in st.session_state:
+        st.session_state.include_withdrawal = saved_settings.get("include_withdrawal", False)
+    if 'auto_refresh' not in st.session_state:
+        st.session_state.auto_refresh = saved_settings.get("auto_refresh", False)
+else:
+    # ברירות מחדל אם אין קובץ
+    if 'residency_idx' not in st.session_state:
+        st.session_state.residency_idx = 1  # יוון
+    if 'include_withdrawal' not in st.session_state:
+        st.session_state.include_withdrawal = False
+    if 'auto_refresh' not in st.session_state:
+        st.session_state.auto_refresh = False
 
 # --- פונקציות לניהול קובץ המעקב החודשי ---
 META_FILE = "portfolio_meta.json"
@@ -788,7 +832,14 @@ if months_locked > 0:
 # --- Sidebar ---
 with st.sidebar:
     st.title("⚙️ הגדרות")
-    residency = st.radio("תושבות מס:", ["ישראל 🇮🇱", "יוון 🇬🇷"], index=1)
+    residency_options = ["ישראל 🇮🇱", "יוון 🇬🇷"]
+    residency = st.radio("תושבות מס:", residency_options, index=st.session_state.residency_idx)
+    new_idx = residency_options.index(residency)
+    if new_idx != st.session_state.residency_idx:
+        st.session_state.residency_idx = new_idx
+        save_settings(st.session_state.residency_idx, 
+                     st.session_state.include_withdrawal, 
+                     st.session_state.auto_refresh)
     
     st.divider()
     
@@ -796,16 +847,26 @@ with st.sidebar:
     st.markdown("### 📉 נכסים צוברים")
     include_withdrawal = st.toggle(
         "כלול משיכה מנכסים צוברים (4%)",
-        value=False,
+        value=st.session_state.include_withdrawal,
         help="משיכה חודשית של 4% שנתי מנכסים צוברים (IBCI) - לפי כלל ה-4% Rule הידוע בקהילת FIRE"
     )
+    if include_withdrawal != st.session_state.include_withdrawal:
+        st.session_state.include_withdrawal = include_withdrawal
+        save_settings(st.session_state.residency_idx, 
+                     st.session_state.include_withdrawal, 
+                     st.session_state.auto_refresh)
     
     st.divider()
     
     # --- רענון אוטומטי ---
     st.markdown("### 🔄 רענון אוטומטי")
     
-    auto_refresh = st.checkbox("הפעל רענון אוטומטי", value=False)
+    auto_refresh = st.checkbox("הפעל רענון אוטומטי", value=st.session_state.auto_refresh)
+    if auto_refresh != st.session_state.auto_refresh:
+        st.session_state.auto_refresh = auto_refresh
+        save_settings(st.session_state.residency_idx, 
+                     st.session_state.include_withdrawal, 
+                     st.session_state.auto_refresh)
     
     # אופציות רענון
     refresh_options = {
@@ -1093,20 +1154,28 @@ total_pnl_pct = ((totalvaleur / total_cost_eur) - 1) * 100 if total_cost_eur > 0
 
 with c1:
     # הצגת שינוי מתחילת החודש
-    delta_color = "normal" if monthly_change_eur >= 0 else "inverse"
+    # תיקון: כשאין שינוי (0), לא מראים חץ
+        # תיקון: כשאין שינוי (0), לא מראים חץ
+        if monthly_change_eur == 0:
+            delta_color = "off"
+        elif monthly_change_eur > 0:
+            delta_color = "normal"
+        else:
+            delta_color = "inverse"
+
     
-    # פורמט נכון עם הסימן לפני סמל המטבע
-    if monthly_change_eur >= 0:
-        delta_text = f"+€{monthly_change_eur:,.0f} (+{monthly_change_pct:.2f}%) מתחילת החודש"
-    else:
-        delta_text = f"€{monthly_change_eur:,.0f} ({monthly_change_pct:.2f}%) מתחילת החודש"
-    
-    st.metric(
-        "💼 שווי תיק כולל", 
-        f"€{totalvaleur:,.0f}",
-        delta_text,
-        delta_color=delta_color
-    )
+        # פורמט נכון עם הסימן לפני סמל המטבע
+        if monthly_change_eur >= 0:
+            delta_text = f"+€{monthly_change_eur:,.0f} (+{monthly_change_pct:.2f}%) מתחילת החודש"
+        else:
+            delta_text = f"€{monthly_change_eur:,.0f} ({monthly_change_pct:.2f}%) מתחילת החודש"
+        
+        st.metric(
+            "💼 שווי תיק כולל", 
+            f"€{totalvaleur:,.0f}",
+            delta_text,
+            delta_color=delta_color
+        )
 
 with c2:
     # בניית הכותרת עם אינדיקטור למשיכה
