@@ -1305,8 +1305,255 @@ if is_new_month:
     st.info("🆕 חודש חדש זוהה! נקודת הייחוס עודכנה אוטומטית.")
 
 st.divider()
+# --- טאבים ---
+tab1, tab2, tab3 = st.tabs(["📊 סקירה כללית", "📈 גרף הכנסות", "🔍 פירוט נכסים"])
 
-# --- Continue with tabs and chart (keeping the existing code) ---
-# Due to character limit, I'll continue in the remaining parts...
+with tab1:
+    st.subheader("💼 התפלגות התיק")
+    
+    # חישוב משקלים
+    greece_value = sum([float(r["שווי"].replace("€", "").replace(",", "")) for r in table_rows if r["קבוצה"] == "יוון 🇬🇷"])
+    israel_value_eur = sum([float(r["שווי"].replace("₪", "").replace(",", "")) / eur_ils for r in table_rows if r["קבוצה"] == "ישראל 🇮🇱"])
+    
+    col_pie1, col_pie2 = st.columns(2)
+    
+    with col_pie1:
+        fig_geo = go.Figure(data=[go.Pie(
+            labels=["נכסים יווניים 🇬🇷", "נכסים ישראליים 🇮🇱"],
+            values=[greece_value, israel_value_eur],
+            hole=0.4,
+            marker=dict(colors=["#1f77b4", "#ff7f0e"]),
+            textinfo='label+percent+value',
+            texttemplate='<b>%{label}</b><br>€%{value:,.0f}<br>(%{percent})'
+        )])
+        fig_geo.update_layout(title="התפלגות גיאוגרפית", height=400)
+        st.plotly_chart(fig_geo, use_container_width=True)
+    
+    with col_pie2:
+        # התפלגות לפי נכס בודד
+        asset_values = {}
+        for r in table_rows:
+            ticker = r["Ticker"]
+            if r["קבוצה"] == "יוון 🇬🇷":
+                val = float(r["שווי"].replace("€", "").replace(",", ""))
+            else:
+                val = float(r["שווי"].replace("₪", "").replace(",", "")) / eur_ils
+            asset_values[ticker] = val
+        
+        fig_assets = go.Figure(data=[go.Pie(
+            labels=list(asset_values.keys()),
+            values=list(asset_values.values()),
+            hole=0.4,
+            textinfo='label+percent',
+            texttemplate='<b>%{label}</b><br>(%{percent})'
+        )])
+        fig_assets.update_layout(title="התפלגות לפי נכס", height=400)
+        st.plotly_chart(fig_assets, use_container_width=True)
+    
+    st.divider()
+    
+    # מדדי ביצועים
+    st.subheader("📈 ביצועי התיק")
+    
+    perf_col1, perf_col2, perf_col3, perf_col4 = st.columns(4)
+    
+    with perf_col1:
+        st.metric("💰 עלות בסיס", f"€{total_cost_eur:,.0f}")
+    
+    with perf_col2:
+        pnl_color = "normal" if total_pnl_eur >= 0 else "inverse"
+        st.metric(
+            "📊 רווח/הפסד כולל", 
+            f"€{total_pnl_eur:,.0f}",
+            f"{total_pnl_pct:+.2f}%",
+            delta_color=pnl_color
+        )
+    
+    with perf_col3:
+        annual_yield = (netcasheur_global * 12 / totalvaleur) * 100 if totalvaleur > 0 else 0
+        st.metric("💵 תשואה שנתית (תזרים)", f"{annual_yield:.2f}%")
+    
+    with perf_col4:
+        total_return = (total_pnl_eur / total_cost_eur) * 100 if total_cost_eur > 0 else 0
+        st.metric("🎯 תשואה כוללת", f"{total_return:+.2f}%")
 
-# [Rest of the code continues with the chart building section...]
+with tab2:
+    st.subheader("📈 היסטוריית הכנסות חודשית")
+    
+    # בניית נתוני הגרף
+    start_date = datetime.strptime(portfolio_start_date, "%Y-%m-%d")
+    end_date = datetime.now() + relativedelta(months=12)
+    
+    chart_data = []
+    current = start_date
+    
+    while current <= end_date:
+        month_key = current.strftime("%Y-%m")
+        
+        if month_key in income_history:
+            # חודש נעול - נתונים מההיסטוריה
+            month_data = income_history[month_key]
+            base = month_data["base_income"]
+            efrn = month_data["efrn_bonus"]
+            greek = month_data["greek_bond"]
+            ibci_withdrawal = month_data.get("ibci_withdrawal", 0)
+        else:
+            # חישוב לחודשים עתידיים
+            base, efrn, greek, ibci_withdrawal = calculate_month_income(
+                current, portfolio, market, eur_ils, st.session_state.withdrawal_strategy
+            )
+        
+        chart_data.append({
+            "month": current.strftime("%b %Y"),
+            "base": round(base, 2),
+            "efrn": round(efrn, 2),
+            "greek": round(greek, 2),
+            "ibci": round(ibci_withdrawal, 2),
+            "total": round(base + efrn + greek + ibci_withdrawal, 2),
+            "locked": month_key in income_history
+        })
+        
+        current += relativedelta(months=1)
+    
+    # יצירת הגרף
+    fig = go.Figure()
+    
+    months = [d["month"] for d in chart_data]
+    
+    # שכבה 1: Base Income (ירוק)
+    fig.add_trace(go.Bar(
+        name="הכנסה בסיסית",
+        x=months,
+        y=[d["base"] for d in chart_data],
+        marker_color="#2ecc71",
+        text=[f"€{d['base']:,.0f}" if d['base'] > 0 else "" for d in chart_data],
+        textposition="inside",
+        hovertemplate="<b>הכנסה בסיסית</b><br>€%{y:,.0f}<extra></extra>"
+    ))
+    
+    # שכבה 2: EFRN (כחול)
+    fig.add_trace(go.Bar(
+        name="EFRN (רבעוני)",
+        x=months,
+        y=[d["efrn"] for d in chart_data],
+        marker_color="#3498db",
+        text=[f"€{d['efrn']:,.0f}" if d['efrn'] > 0 else "" for d in chart_data],
+        textposition="inside",
+        hovertemplate="<b>EFRN</b><br>€%{y:,.0f}<extra></extra>"
+    ))
+    
+    # שכבה 3: Greek Bond (צהוב)
+    fig.add_trace(go.Bar(
+        name="אג\"ח יוון (שנתי)",
+        x=months,
+        y=[d["greek"] for d in chart_data],
+        marker_color="#f39c12",
+        text=[f"€{d['greek']:,.0f}" if d['greek'] > 0 else "" for d in chart_data],
+        textposition="inside",
+        hovertemplate="<b>אג\"ח יוון</b><br>€%{y:,.0f}<extra></extra>"
+    ))
+    
+    # שכבה 4: IBCI Withdrawal (סגול) - רק אם יש משיכה
+    if include_withdrawal:
+        fig.add_trace(go.Bar(
+            name="משיכת IBCI",
+            x=months,
+            y=[d["ibci"] for d in chart_data],
+            marker_color="#9b59b6",
+            text=[f"€{d['ibci']:,.0f}" if d['ibci'] > 0 else "" for d in chart_data],
+            textposition="inside",
+            hovertemplate="<b>משיכת IBCI</b><br>€%{y:,.0f}<extra></extra>"
+        ))
+    
+    # קו סכום כולל
+    fig.add_trace(go.Scatter(
+        name="סה\"כ חודשי",
+        x=months,
+        y=[d["total"] for d in chart_data],
+        mode="lines+markers",
+        line=dict(color="#e74c3c", width=3),
+        marker=dict(size=8),
+        yaxis="y2",
+        hovertemplate="<b>סה\"כ</b><br>€%{y:,.0f}<extra></extra>"
+    ))
+    
+    # סימון חודשים נעולים
+    locked_months = [d["month"] for d in chart_data if d["locked"]]
+    if locked_months:
+        fig.add_trace(go.Scatter(
+            name="חודשים נעולים",
+            x=locked_months,
+            y=[0] * len(locked_months),
+            mode="markers",
+            marker=dict(symbol="lock", size=12, color="#95a5a6"),
+            showlegend=True,
+            hovertemplate="<b>נעול</b><extra></extra>"
+        ))
+    
+    fig.update_layout(
+        barmode="stack",
+        height=500,
+        xaxis=dict(title="חודש", tickangle=-45),
+        yaxis=dict(title="הכנסה (€)", side="right"),
+        yaxis2=dict(title="סה\"כ (€)", overlaying="y", side="left"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # סטטיסטיקות גרף
+    st.divider()
+    
+    stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+    
+    avg_monthly = sum([d["total"] for d in chart_data]) / len(chart_data)
+    max_monthly = max([d["total"] for d in chart_data])
+    min_monthly = min([d["total"] for d in chart_data])
+    
+    with stat_col1:
+        st.metric("📊 ממוצע חודשי", f"€{avg_monthly:,.0f}")
+    
+    with stat_col2:
+        st.metric("📈 מקסימום", f"€{max_monthly:,.0f}")
+    
+    with stat_col3:
+        st.metric("📉 מינימום", f"€{min_monthly:,.0f}")
+    
+    with stat_col4:
+        annual_total = sum([d["total"] for d in chart_data[:12]])
+        st.metric("💰 סה\"כ שנתי (12 חודשים)", f"€{annual_total:,.0f}")
+
+with tab3:
+    st.subheader("🔍 פירוט נכסים")
+    
+    # טבלה מפורטת
+    df_table = pd.DataFrame(table_rows)
+    
+    # עיצוב לפי רווח/הפסד
+    def color_pnl(val):
+        if isinstance(val, (int, float)):
+            color = 'green' if val >= 0 else 'red'
+            return f'color: {color}'
+        return ''
+    
+    styled_df = df_table.style.applymap(color_pnl, subset=["שינוי (%)"])
+    
+    st.dataframe(styled_df, use_container_width=True, height=400)
+    
+    st.divider()
+    
+    # תיאורי נכסים
+    st.subheader("📚 מידע על הנכסים")
+    
+    for ticker, desc in descriptions.items():
+        with st.expander(f"📄 {ticker}"):
+            st.markdown(f'<div class="rtl-box">{desc}</div>', unsafe_allow_html=True)
+
+st.divider()
+
+# --- פוטר ---
+st.caption("💡 הערה: נתוני השוק מתעדכנים בהתאם להגדרות הרענון האוטומטי או בלחיצה ידנית על כפתור הרענון.")
+st.caption(f"📅 התיק פועל מאז: {portfolio_start_date}")
+st.caption("🔒 חודשים נעולים לא ניתנים לעריכה ונשמרים בהיסטוריה.")
+
